@@ -15,7 +15,14 @@ from skimage import io
 from skimage.color import rgb2gray
 import matplotlib.pyplot as plt
 import logging
+from tensorflow.keras.callbacks import TensorBoard
 
+
+# Directory to save TensorBoard logs
+log_dir = "logs/fit/"  # You can adjust this path if necessary
+
+# Add TensorBoard callback
+tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
 
 # Directories containing the images
 hr_train_dir = '/mimer/NOBACKUP/groups/geodl/DeepRockSR-2D/shuffled2D/shuffled2D_train_HR'
@@ -30,14 +37,12 @@ learning_rate = 1e-3
 # None to use all  images
 num_train = 2000    
 num_val = 200       
-num_test = 200      
 
 print(f"Batch size: {batch_size}")
 print(f"Number of epochs: {epochs}")
 print(f"Learning rate: {learning_rate}")
 print(f"Number of training images: {num_train}")
 print(f"Number of validation images: {num_val}")
-print(f"Number of test images: {num_test}")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -211,7 +216,7 @@ def load_image_paths(hr_dir, lr_dir):
 
     return image_pairs
 
-def split_image_pairs(image_pairs, num_train, num_val, num_test):
+def split_image_pairs(image_pairs, num_train, num_val):
     """
     Splits image pairs into train, validation, and test sets based on specified numbers.
     """
@@ -221,15 +226,12 @@ def split_image_pairs(image_pairs, num_train, num_val, num_test):
         specified_sum += num_train
     if num_val is not None:
         specified_sum += num_val
-    if num_test is not None:
-        specified_sum += num_test
 
     if specified_sum > total_images:
-        raise ValueError("The sum of train, val, and test images exceeds the total number of images.")
+        raise ValueError("The sum of train and val images exceeds the total number of images.")
 
     train_pairs = []
     val_pairs = []
-    test_pairs = []
     remaining_pairs = image_pairs.copy()
 
     # Assign training images
@@ -242,10 +244,6 @@ def split_image_pairs(image_pairs, num_train, num_val, num_test):
         val_pairs = remaining_pairs[:num_val]
         remaining_pairs = remaining_pairs[num_val:]
 
-    # Assign test images
-    if num_test is not None:
-        test_pairs = remaining_pairs[:num_test]
-        remaining_pairs = remaining_pairs[num_test:]
 
     # Assign remaining images to the first set that has None
     if remaining_pairs:
@@ -253,12 +251,10 @@ def split_image_pairs(image_pairs, num_train, num_val, num_test):
             train_pairs.extend(remaining_pairs)
         elif num_val is None:
             val_pairs.extend(remaining_pairs)
-        elif num_test is None:
-            test_pairs.extend(remaining_pairs)
         else:
             logger.warning("Some images were not assigned to any set. Consider adjusting your numbers.")
 
-    return train_pairs, val_pairs, test_pairs
+    return train_pairs, val_pairs
 
 def load_and_preprocess_images(image_pairs, target_hr_size=(500, 500), target_lr_size=(250, 250)):
     """
@@ -303,19 +299,17 @@ def load_and_preprocess_images(image_pairs, target_hr_size=(500, 500), target_lr
 # Load image paths
 all_image_pairs = load_image_paths(hr_train_dir, lr_train_dir)
 
-# Split image pairs into train, val, and test sets
-train_pairs, val_pairs, test_pairs = split_image_pairs(all_image_pairs, num_train, num_val, num_test)
+# Split image pairs into train and val sets
+train_pairs, val_pairs = split_image_pairs(all_image_pairs, num_train, num_val)
 
 print(f"Number of training image pairs: {len(train_pairs)}")
 print(f"Number of validation image pairs: {len(val_pairs)}")
-print(f"Number of test image pairs: {len(test_pairs)}")
 
 # Load and preprocess images for each set
 lr_train, hr_train = load_and_preprocess_images(train_pairs)
 lr_val, hr_val = load_and_preprocess_images(val_pairs)
-lr_test, hr_test = load_and_preprocess_images(test_pairs)
 
-# === Model Instantiation ===
+# Model Instantiation
 
 input_shape = (250, 250, 1)  # LR image size
 model = dual_branch_unet(input_shape)
@@ -341,7 +335,6 @@ model.compile(optimizer=optimizer, loss=combined_loss, metrics=[psnr_metric, ssi
 model.summary()
 
 #  Callbacks 
-
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
 early_stopping = EarlyStopping(
@@ -367,21 +360,19 @@ reduce_lr = ReduceLROnPlateau(
 )
 
 # Combine callbacks
-callbacks = [early_stopping, checkpoint, reduce_lr]
+callbacks = [early_stopping, checkpoint, reduce_lr, tensorboard_callback]
 
 # Training
-
 history = model.fit(
     lr_train, hr_train,
     epochs=epochs,
     batch_size=batch_size,
     validation_data=(lr_val, hr_val),
     callbacks=callbacks,
-    verbose=1
+    verbose=1,
 )
 
 #  Plotting Training History 
-
 def plot_training_history(history, save_path='plots/training_history_1.png'):
     """
     Plots the training and validation loss over epochs and saves the plot to a file.
@@ -417,82 +408,7 @@ def plot_training_history(history, save_path='plots/training_history_1.png'):
     plt.close()
     print(f"Training history plot saved to '{save_path}'")
 
-
 plot_training_history(history)
-
-# === Evaluation and Visualization ===
-def visualize_predictions(model, lr_images, hr_images, num_samples=5, save_dir='plots'):
-    """
-    Visualizes the model's predictions alongside the LR inputs and HR ground truths,
-    and saves the plots to files.
-
-    Args:
-        model: Trained Keras model.
-        lr_images (numpy.ndarray): Array of LR input images.
-        hr_images (numpy.ndarray): Array of HR ground truth images.
-        num_samples (int): Number of samples to visualize.
-        save_dir (str): Directory where to save the plots.
-    """
-    import os
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    indices = np.random.choice(len(lr_images), num_samples, replace=False)
-
-    for i, idx in enumerate(indices):
-        lr = lr_images[idx]
-        hr = hr_images[idx]
-        sr = model.predict(np.expand_dims(lr, axis=0))[0]  # Super-resolved image
-
-        plt.figure(figsize=(15, 5))
-
-        plt.subplot(1, 3, 1)
-        plt.imshow(lr[:, :, 0], cmap='gray')
-        plt.title('Low-Resolution Input', fontsize=14)
-        plt.axis('off')
-
-        plt.subplot(1, 3, 2)
-        plt.imshow(sr[:, :, 0], cmap='gray')
-        plt.title('Super-Resolved Output', fontsize=14)
-        plt.axis('off')
-
-        plt.subplot(1, 3, 3)
-        plt.imshow(hr[:, :, 0], cmap='gray')
-        plt.title('High-Resolution Ground Truth', fontsize=14)
-        plt.axis('off')
-
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.85)  # Adjust top margin to make room for titles
-        save_path = os.path.join(save_dir, f'prediction_{i+1}.png')
-        plt.savefig(save_path, bbox_inches='tight')
-        plt.close()
-        print(f"Saved prediction visualization to '{save_path}'")
-
-# Evaluation on Test Set
-
-def evaluate_model(model, lr_images, hr_images):
-    """
-    Evaluates the model using PSNR and SSIM metrics.
-    """
-    sr_images = model.predict(lr_images)
-
-    psnr_values = []
-    ssim_values = []
-
-    for sr, hr in zip(sr_images, hr_images):
-        psnr_val = tf.image.psnr(hr, sr, max_val=1.0).numpy()
-        ssim_val = tf.image.ssim(hr, sr, max_val=1.0).numpy()
-        psnr_values.append(psnr_val)
-        ssim_values.append(ssim_val)
-
-    print(f"Average PSNR on Test Set: {np.mean(psnr_values):.2f} dB")
-    print(f"Average SSIM on Test Set: {np.mean(ssim_values):.4f}")
-
-# Evaluate the model on the test set
-evaluate_model(model, lr_test, hr_test)
-
-# Visualize some predictions on the test set and save the plots
-visualize_predictions(model, lr_test, hr_test, num_samples=5, save_dir='plots')
 
 # Saving the Final Model
 model.save('models/dual_branch_unet_with_attention_final_1.keras')

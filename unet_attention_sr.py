@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 import logging
 from tensorflow.keras.callbacks import TensorBoard
 
-
 # Directory to save TensorBoard logs
 log_dir = "logs/fit/"  # You can adjust this path if necessary
 
@@ -29,11 +28,11 @@ hr_train_dir = '/mimer/NOBACKUP/groups/geodl/DeepRockSR-2D/shuffled2D/shuffled2D
 lr_train_dir = '/mimer/NOBACKUP/groups/geodl/DeepRockSR-2D/shuffled2D/shuffled2D_train_LR_default_X2'
 
 # Training parameters
-batch_size = 4     # Adjusted batch size
+batch_size = 4 
 epochs = 100
 learning_rate = 1e-3
 
-# Set the number of images for train, validation, and test sets
+# Set the number of images for train and validation sets
 # None to use all  images
 num_train = 2000    
 num_val = 200       
@@ -48,7 +47,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Attention Modules
-
 def channel_attention(input_feature, ratio=8):
 
     channel = K.int_shape(input_feature)[-1]

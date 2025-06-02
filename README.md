@@ -1,1 +1,1 @@
-# Geological-CT-image-super-resolution-using-DL
+# Human Centered Approach for Image Super-Resolution
